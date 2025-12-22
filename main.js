@@ -13,7 +13,7 @@ const OUTPUT_FILE = `filter_wallet_${DATE}.txt`;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // =======================
-// DeBank API
+// Debank API
 // =======================
 async function fetchDebank(address) {
   try {
@@ -37,7 +37,8 @@ async function fetchDebank(address) {
 }
 
 // =======================
-// MODE 1: private_key.txt
+// MODE 1
+// private_key.txt
 // =======================
 async function runMode1() {
   const INPUT = path.join(__dirname, "private_key.txt");
@@ -81,9 +82,11 @@ async function runMode1() {
     if (debank.totalUSD > 0 || debank.hasDefi) {
       fs.appendFileSync(
         OUTPUT_FILE,
-        `PRIVATE_KEY: ${privateKey}
-ADDRESS: ${address}
-BALANCE_USD: ${debank.totalUSD}
+`{
+  'address': '${address}',
+  'balance': ${debank.totalUSD},
+  'private_key': '${privateKey.replace("0x","")}'
+},
 ----------------------------
 `
       );
@@ -93,11 +96,14 @@ BALANCE_USD: ${debank.totalUSD}
     await sleep(DELAY_MS);
   }
 
-  console.log(`\n✅ MODE 1 SELESAI | Disimpan: ${saved}`);
+  console.log(`\n✅ MODE 1 SELESAI`);
+  console.log(`🔍 Dicek   : ${checked}`);
+  console.log(`💾 Disimpan: ${saved}`);
 }
 
 // =======================
-// MODE 2: private_key1.txt
+// MODE 2
+// private_key1.txt (object python-style)
 // =======================
 async function runMode2() {
   const INPUT = path.join(__dirname, "private_key1.txt");
@@ -116,11 +122,12 @@ async function runMode2() {
   let saved = 0;
 
   for await (const line of rl) {
-    // cari private_key di baris mana pun
-    const match = line.match(/private_key\s*:\s*['"]([a-fA-F0-9]{64})['"]/);
+    const match = line.match(
+      /private_key\s*:\s*['"]?(0x)?([a-fA-F0-9]{64})['"]?\s*[},]*/
+    );
     if (!match) continue;
 
-    const privateKey = "0x" + match[1];
+    const privateKey = "0x" + match[2];
 
     let wallet;
     try {
@@ -145,7 +152,7 @@ async function runMode2() {
 `{
   'address': '${address}',
   'balance': ${debank.totalUSD},
-  'private_key': '${match[1]}'
+  'private_key': '${match[2]}'
 },
 ----------------------------
 `
@@ -159,7 +166,7 @@ async function runMode2() {
   console.log(`\n✅ MODE 2 SELESAI`);
   console.log(`🔍 Dicek   : ${checked}`);
   console.log(`💾 Disimpan: ${saved}`);
-        }
+}
 
 // =======================
 // MENU
