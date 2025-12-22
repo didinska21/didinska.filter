@@ -112,20 +112,13 @@ async function runMode2() {
     crlfDelay: Infinity
   });
 
-  let buffer = "";
   let checked = 0;
   let saved = 0;
 
   for await (const line of rl) {
-    buffer += line + "\n";
-
-    if (!line.trim().endsWith("},")) continue;
-
-    const match = buffer.match(/private_key\s*:\s*['"]([a-fA-F0-9]{64})['"]/);
-    if (!match) {
-      buffer = "";
-      continue;
-    }
+    // cari private_key di baris mana pun
+    const match = line.match(/private_key\s*:\s*['"]([a-fA-F0-9]{64})['"]/);
+    if (!match) continue;
 
     const privateKey = "0x" + match[1];
 
@@ -133,7 +126,6 @@ async function runMode2() {
     try {
       wallet = new Wallet(privateKey);
     } catch {
-      buffer = "";
       continue;
     }
 
@@ -143,7 +135,6 @@ async function runMode2() {
 
     const debank = await fetchDebank(address);
     if (!debank) {
-      buffer = "";
       await sleep(DELAY_MS);
       continue;
     }
@@ -151,17 +142,24 @@ async function runMode2() {
     if (debank.totalUSD > 0 || debank.hasDefi) {
       fs.appendFileSync(
         OUTPUT_FILE,
-        buffer + "----------------------------\n"
+`{
+  'address': '${address}',
+  'balance': ${debank.totalUSD},
+  'private_key': '${match[1]}'
+},
+----------------------------
+`
       );
       saved++;
     }
 
-    buffer = "";
     await sleep(DELAY_MS);
   }
 
-  console.log(`\n✅ MODE 2 SELESAI | Disimpan: ${saved}`);
-}
+  console.log(`\n✅ MODE 2 SELESAI`);
+  console.log(`🔍 Dicek   : ${checked}`);
+  console.log(`💾 Disimpan: ${saved}`);
+        }
 
 // =======================
 // MENU
