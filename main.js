@@ -103,7 +103,7 @@ async function runMode1() {
 
 // =======================
 // MODE 2
-// private_key1.txt (object python-style)
+// private_key1.txt
 // =======================
 async function runMode2() {
   const INPUT = path.join(__dirname, "private_key1.txt");
@@ -123,16 +123,18 @@ async function runMode2() {
 
   for await (const line of rl) {
     const match = line.match(
-      /private_key\s*:\s*['"]?(0x)?([a-fA-F0-9]{64})['"]?\s*[},]*/
+      /private_key\s*:\s*['"]?(0x)?([a-fA-F0-9]{56,66})['"]?\s*[},]*/
     );
     if (!match) continue;
 
-    const privateKey = "0x" + match[2];
+    let privateKey = match[2];
+    if (!privateKey.startsWith("0x")) privateKey = "0x" + privateKey;
 
     let wallet;
     try {
       wallet = new Wallet(privateKey);
     } catch {
+      // private key invalid → skip
       continue;
     }
 
@@ -152,7 +154,7 @@ async function runMode2() {
 `{
   'address': '${address}',
   'balance': ${debank.totalUSD},
-  'private_key': '${match[2]}'
+  'private_key': '${privateKey.replace("0x","")}'
 },
 ----------------------------
 `
@@ -163,7 +165,7 @@ async function runMode2() {
     await sleep(DELAY_MS);
   }
 
-  console.log(`\n✅ MODE 2 SELESAI`);
+  console.log("\n✅ MODE 2 SELESAI");
   console.log(`🔍 Dicek   : ${checked}`);
   console.log(`💾 Disimpan: ${saved}`);
 }
