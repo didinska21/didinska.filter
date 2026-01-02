@@ -7,7 +7,7 @@ const { ethers } = require('ethers');
 // Konfigurasi
 const CONFIG = {
   DEBANK_API: 'https://pro-openapi.debank.com/v1',
-  ACCESS_KEY: 'YOUR_DEBANK_ACCESS_KEY_HERE', // Ganti dengan access key Anda
+  ACCESS_KEY: 'fd7b384ce05d718ebd28965374cb15a3a4e582cb', // Ganti dengan access key Anda
   DELAY_MS: 1000, // Delay antar request (1 detik)
 };
 
