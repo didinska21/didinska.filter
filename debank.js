@@ -9,6 +9,7 @@ const CONFIG = {
   DEBANK_API: 'https://pro-openapi.debank.com/v1',
   ACCESS_KEY: 'fd7b384ce05d718ebd28965374cb15a3a4e582cb', // Ganti dengan access key Anda
   DELAY_MS: 100, // Delay antar request (0.1 detik)
+  DEBUG: true, // Set false untuk disable debug log
 };
 
 // Fungsi untuk input dari user
@@ -111,8 +112,17 @@ async function getWalletBalance(address) {
         }
       }
     );
+    
+    if (CONFIG.DEBUG) {
+      console.log(`  [DEBUG] Balance API Response:`, JSON.stringify(response.data, null, 2));
+    }
+    
     return response.data;
   } catch (error) {
+    console.error(`  ❌ Error getting balance: ${error.message}`);
+    if (error.response) {
+      console.error(`  [API Error] Status: ${error.response.status}, Data:`, error.response.data);
+    }
     return null;
   }
 }
@@ -130,8 +140,17 @@ async function getWalletChains(address) {
         }
       }
     );
+    
+    if (CONFIG.DEBUG) {
+      console.log(`  [DEBUG] Chains API Response:`, JSON.stringify(response.data, null, 2));
+    }
+    
     return response.data;
   } catch (error) {
+    console.error(`  ❌ Error getting chains: ${error.message}`);
+    if (error.response) {
+      console.error(`  [API Error] Status: ${error.response.status}`);
+    }
     return null;
   }
 }
