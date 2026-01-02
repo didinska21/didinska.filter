@@ -7,7 +7,7 @@ const { ethers } = require('ethers');
 // Konfigurasi
 const CONFIG = {
   DEBANK_API: 'https://pro-openapi.debank.com/v1',
-  ACCESS_KEY: 'fd7b384ce05d718ebd28965374cb15a3a4e582cb', // Ganti dengan access key Anda
+  ACCESS_KEY: 'YOUR_DEBANK_ACCESS_KEY_HERE', // Ganti dengan access key Anda
   DELAY_MS: 1000, // Delay antar request (1 detik)
 };
 
@@ -60,11 +60,35 @@ function readPrivateKeys(filePath) {
     }
 
     const data = fs.readFileSync(resolvedPath, 'utf8');
-    const privateKeys = data.split('\n')
+    let privateKeys = [];
+    
+    // Cek apakah format JSON/Python dict
+    if (data.trim().startsWith('[')) {
+      try {
+        // Replace single quotes dengan double quotes untuk valid JSON
+        const jsonData = data.replace(/'/g, '"');
+        const parsed = JSON.parse(jsonData);
+        
+        if (Array.isArray(parsed)) {
+          privateKeys = parsed.map(item => item.private_key).filter(pk => pk);
+          console.log(`✅ File ditemukan: ${resolvedPath}`);
+          console.log(`📋 Format: JSON/Dict`);
+          console.log(`🔑 Total private keys: ${privateKeys.length}\n`);
+          return privateKeys;
+        }
+      } catch (jsonError) {
+        console.error(`❌ Error parsing JSON: ${jsonError.message}`);
+        return null;
+      }
+    }
+    
+    // Format sederhana (private key per baris)
+    privateKeys = data.split('\n')
       .map(line => line.trim())
       .filter(line => line.length > 0);
     
     console.log(`✅ File ditemukan: ${resolvedPath}`);
+    console.log(`📋 Format: Plain text (per baris)`);
     console.log(`🔑 Total private keys: ${privateKeys.length}\n`);
     
     return privateKeys;
