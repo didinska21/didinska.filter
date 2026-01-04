@@ -3,13 +3,16 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 const { ethers } = require('ethers');
+require('dotenv').config(); // Tambahan untuk env variables
 
 // Konfigurasi
 const CONFIG = {
   DEBANK_API: 'https://pro-openapi.debank.com/v1',
-  ACCESS_KEY: '3eff98c0b08e211fe4d7f3329842c57c58b9e264', // Ganti dengan access key Anda
-  DELAY_MS: 100, // Delay antar request (0.1 detik)
-  DEBUG: true, // Set false untuk disable debug log
+  ACCESS_KEY: process.env.DEBANK_ACCESS_KEY || '', // Dari environment variable
+  DELAY_MS: 500, // Naikkan dari 100ms ke 500ms untuk menghindari rate limit
+  MAX_RETRIES: 3, // Jumlah retry jika request gagal
+  RETRY_DELAY_MS: 2000, // Delay antar retry
+  DEBUG: process.env.DEBUG === 'true' || false,
 };
 
 // Fungsi untuk input dari user
@@ -28,6 +31,13 @@ function question(query) {
 // Fungsi delay
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Fungsi exponential backoff untuk retry
+async function exponentialBackoff(attempt) {
+  const backoffTime = CONFIG.RETRY_DELAY_MS * Math.pow(2, attempt);
+  console.log(`  ⏳ Retrying in ${backoffTime / 1000}s...`);
+  await delay(backoffTime);
+}
+
 // Fungsi untuk generate nama file output
 function generateOutputFilename() {
   const now = new Date();
@@ -40,17 +50,16 @@ function generateOutputFilename() {
 // Fungsi untuk convert private key ke address
 function privateKeyToAddress(privateKey) {
   try {
-    // Tambahkan 0x jika belum ada
     const pk = privateKey.startsWith('0x') ? privateKey : '0x' + privateKey;
     const wallet = new ethers.Wallet(pk);
     return wallet.address;
   } catch (error) {
-    console.error(`Error converting private key: ${error.message}`);
+    console.error(`  ❌ Error converting private key: ${error.message}`);
     return null;
   }
 }
 
-// Fungsi untuk membaca daftar private keys dari file
+// Fungsi untuk membaca daftar private keys dari file dengan JSON parsing yang lebih robust
 function readPrivateKeys(filePath) {
   try {
     const resolvedPath = path.resolve(filePath);
@@ -66,12 +75,27 @@ function readPrivateKeys(filePath) {
     // Cek apakah format JSON/Python dict
     if (data.trim().startsWith('[')) {
       try {
-        // Replace single quotes dengan double quotes untuk valid JSON
-        const jsonData = data.replace(/'/g, '"');
+        // Parsing yang lebih robust untuk Python-style dict
+        let jsonData = data.trim();
+        
+        // Replace single quotes dengan double quotes HANYA untuk keys dan string values
+        // Menggunakan regex yang lebih aman
+        jsonData = jsonData
+          .replace(/(\w+):/g, '"$1":')  // Wrap keys dengan quotes
+          .replace(/:\s*'([^']*)'/g, ': "$1"')  // Replace single quotes di values
+          .replace(/,\s*}/g, '}')  // Remove trailing commas
+          .replace(/,\s*]/g, ']'); // Remove trailing commas di array
+        
         const parsed = JSON.parse(jsonData);
         
         if (Array.isArray(parsed)) {
-          privateKeys = parsed.map(item => item.private_key).filter(pk => pk);
+          privateKeys = parsed
+            .map(item => {
+              if (typeof item === 'string') return item;
+              return item.private_key || item.privateKey || item.key;
+            })
+            .filter(pk => pk && pk.length > 0);
+          
           console.log(`✅ File ditemukan: ${resolvedPath}`);
           console.log(`📋 Format: JSON/Dict`);
           console.log(`🔑 Total private keys: ${privateKeys.length}\n`);
@@ -79,14 +103,15 @@ function readPrivateKeys(filePath) {
         }
       } catch (jsonError) {
         console.error(`❌ Error parsing JSON: ${jsonError.message}`);
-        return null;
+        console.log(`💡 Pastikan format file valid. Mencoba format plain text...\n`);
+        // Fallback ke plain text parsing
       }
     }
     
     // Format sederhana (private key per baris)
     privateKeys = data.split('\n')
       .map(line => line.trim())
-      .filter(line => line.length > 0);
+      .filter(line => line.length > 0 && !line.startsWith('#') && !line.startsWith('//'));
     
     console.log(`✅ File ditemukan: ${resolvedPath}`);
     console.log(`📋 Format: Plain text (per baris)`);
@@ -99,9 +124,44 @@ function readPrivateKeys(filePath) {
   }
 }
 
+// Fungsi wrapper untuk API call dengan retry mechanism
+async function apiCallWithRetry(apiFunction, ...args) {
+  let lastError = null;
+  
+  for (let attempt = 0; attempt < CONFIG.MAX_RETRIES; attempt++) {
+    try {
+      const result = await apiFunction(...args);
+      return result;
+    } catch (error) {
+      lastError = error;
+      
+      // Log error dengan detail
+      console.error(`  ⚠️ Attempt ${attempt + 1}/${CONFIG.MAX_RETRIES} failed: ${error.message}`);
+      
+      if (error.response) {
+        console.error(`  [API Error] Status: ${error.response.status}`);
+        
+        // Jangan retry jika error 401 (unauthorized) atau 403 (forbidden)
+        if (error.response.status === 401 || error.response.status === 403) {
+          console.error(`  ❌ Authentication error - check your ACCESS_KEY`);
+          throw error;
+        }
+      }
+      
+      // Retry dengan exponential backoff jika bukan attempt terakhir
+      if (attempt < CONFIG.MAX_RETRIES - 1) {
+        await exponentialBackoff(attempt);
+      }
+    }
+  }
+  
+  // Semua retry gagal
+  throw lastError;
+}
+
 // Fungsi untuk mendapatkan total balance wallet
 async function getWalletBalance(address) {
-  try {
+  const apiCall = async () => {
     const response = await axios.get(
       `${CONFIG.DEBANK_API}/user/total_balance`,
       {
@@ -109,7 +169,8 @@ async function getWalletBalance(address) {
         headers: {
           'AccessKey': CONFIG.ACCESS_KEY,
           'Accept': 'application/json'
-        }
+        },
+        timeout: 10000 // 10 second timeout
       }
     );
     
@@ -118,18 +179,19 @@ async function getWalletBalance(address) {
     }
     
     return response.data;
+  };
+  
+  try {
+    return await apiCallWithRetry(apiCall);
   } catch (error) {
-    console.error(`  ❌ Error getting balance: ${error.message}`);
-    if (error.response) {
-      console.error(`  [API Error] Status: ${error.response.status}, Data:`, error.response.data);
-    }
+    console.error(`  ❌ Failed to get balance after ${CONFIG.MAX_RETRIES} attempts`);
     return null;
   }
 }
 
 // Fungsi untuk mendapatkan daftar chain yang digunakan
 async function getWalletChains(address) {
-  try {
+  const apiCall = async () => {
     const response = await axios.get(
       `${CONFIG.DEBANK_API}/user/used_chain_list`,
       {
@@ -137,7 +199,8 @@ async function getWalletChains(address) {
         headers: {
           'AccessKey': CONFIG.ACCESS_KEY,
           'Accept': 'application/json'
-        }
+        },
+        timeout: 10000
       }
     );
     
@@ -146,16 +209,17 @@ async function getWalletChains(address) {
     }
     
     return response.data;
+  };
+  
+  try {
+    return await apiCallWithRetry(apiCall);
   } catch (error) {
-    console.error(`  ❌ Error getting chains: ${error.message}`);
-    if (error.response) {
-      console.error(`  [API Error] Status: ${error.response.status}`);
-    }
+    console.error(`  ❌ Failed to get chains after ${CONFIG.MAX_RETRIES} attempts`);
     return null;
   }
 }
 
-// Fungsi untuk mendapatkan token list dari semua chain
+// Fungsi untuk mendapatkan token list dari semua chain dengan proper error logging
 async function getAllTokens(address, chains) {
   const allCoins = {};
   
@@ -163,22 +227,28 @@ async function getAllTokens(address, chains) {
   
   for (const chain of chains) {
     try {
-      const response = await axios.get(
-        `${CONFIG.DEBANK_API}/user/token_list`,
-        {
-          params: { 
-            id: address,
-            chain_id: chain.id
-          },
-          headers: {
-            'AccessKey': CONFIG.ACCESS_KEY,
-            'Accept': 'application/json'
+      const apiCall = async () => {
+        const response = await axios.get(
+          `${CONFIG.DEBANK_API}/user/token_list`,
+          {
+            params: { 
+              id: address,
+              chain_id: chain.id
+            },
+            headers: {
+              'AccessKey': CONFIG.ACCESS_KEY,
+              'Accept': 'application/json'
+            },
+            timeout: 10000
           }
-        }
-      );
+        );
+        return response.data;
+      };
       
-      if (response.data && Array.isArray(response.data)) {
-        response.data.forEach(token => {
+      const tokens = await apiCallWithRetry(apiCall);
+      
+      if (tokens && Array.isArray(tokens)) {
+        tokens.forEach(token => {
           if (token.amount > 0) {
             allCoins[token.symbol] = (allCoins[token.symbol] || 0) + token.amount;
           }
@@ -186,8 +256,13 @@ async function getAllTokens(address, chains) {
       }
       
       await delay(CONFIG.DELAY_MS);
+      
     } catch (error) {
-      // Skip chain jika error
+      // Log error tapi lanjutkan ke chain berikutnya
+      console.error(`  ⚠️ Error getting tokens from chain ${chain.id}: ${error.message}`);
+      if (CONFIG.DEBUG && error.response) {
+        console.error(`  [DEBUG] Status: ${error.response.status}, Data:`, error.response.data);
+      }
     }
   }
   
@@ -258,18 +333,24 @@ function saveResults(results, outputFile) {
 // Fungsi utama
 async function main() {
   console.log('='.repeat(60));
-  console.log('🚀 DeBank Batch Wallet Scanner (Private Key)');
+  console.log('🚀 DeBank Batch Wallet Scanner (Private Key) - v2.0');
   console.log('='.repeat(60));
 
   // Validasi access key
-  if (CONFIG.ACCESS_KEY === 'YOUR_DEBANK_ACCESS_KEY_HERE') {
-    console.error('\n❌ Error: Harap isi ACCESS_KEY di konfigurasi!');
-    console.log('💡 Dapatkan access key di: https://debank.com/openapi');
+  if (!CONFIG.ACCESS_KEY || CONFIG.ACCESS_KEY.trim() === '') {
+    console.error('\n❌ Error: ACCESS_KEY tidak ditemukan!');
+    console.log('💡 Buat file .env dan tambahkan:');
+    console.log('   DEBANK_ACCESS_KEY=your_access_key_here');
+    console.log('\n   Dapatkan access key di: https://debank.com/openapi');
     return;
   }
 
+  console.log(`✅ Access Key loaded: ${CONFIG.ACCESS_KEY.substring(0, 8)}...${CONFIG.ACCESS_KEY.slice(-4)}`);
+  console.log(`⚙️  Retry mechanism: ${CONFIG.MAX_RETRIES} attempts with exponential backoff`);
+  console.log(`⏱️  Delay between requests: ${CONFIG.DELAY_MS}ms\n`);
+
   // Input file path dari user
-  console.log('\n📂 Masukkan path file private keys:');
+  console.log('📂 Masukkan path file private keys:');
   console.log('   Contoh:');
   console.log('   - pvkey1.txt (file di folder yang sama)');
   console.log('   - /pvkey/pvkey1.txt (folder pvkey di root)');
@@ -327,6 +408,7 @@ async function main() {
   
   console.log('-'.repeat(60));
   console.log(`💰 Total Portfolio Value: $${totalValue.toFixed(2)}`);
+  console.log(`📊 Successful scans: ${sortedResults.length}/${privateKeys.length}`);
   console.log(`📁 Results saved to: ${outputPath}`);
   console.log('='.repeat(60));
 }
@@ -334,5 +416,8 @@ async function main() {
 // Jalankan script
 main().catch(error => {
   console.error('\n❌ Fatal error:', error.message);
+  if (CONFIG.DEBUG) {
+    console.error(error.stack);
+  }
   process.exit(1);
 });
